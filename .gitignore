@@ -1,0 +1,8 @@
+/vendor/
+/.env
+/.phpunit.cache/
+/.phpunit.result.cache
+/.tools/
+*.code-workspace
+*S.md
+/.git

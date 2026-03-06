@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.4
+        ports:
+          - 3306:3306
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: cabify
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup PHP 8.4
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          coverage: xdebug
+          extensions: pdo_mysql, json, simplexml
+
+      - name: Install dependencies
+        run: ./scripts/composerw install --no-interaction --prefer-dist --no-progress
+
+      - name: Create CI environment file
+        run: |
+          cat > .env <<'EOF'
+          APP_ENV=test
+          APP_DEBUG=0
+          APP_PORT=9091
+          DB_HOST=127.0.0.1
+          DB_PORT=3306
+          DB_NAME=cabify
+          DB_USER=root
+          DB_PASS=root
+          DB_CHARSET=utf8mb4
+          EOF
+
+      - name: Wait for MySQL
+        run: |
+          for i in {1..30}; do
+            if php -r "new PDO('mysql:host=127.0.0.1;port=3306;dbname=cabify;charset=utf8mb4', 'root', 'root');"; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "MySQL did not become ready in time."
+          exit 1
+
+      - name: Run migrations
+        run: ./scripts/composerw migrate
+
+      - name: Lint code
+        run: ./scripts/composerw lint
+
+      - name: Run test suite
+        run: ./scripts/composerw test
+
+      - name: Run coverage
+        run: ./scripts/composerw coverage
+
+      - name: Validate coverage threshold
+        run: ./scripts/composerw coverage:check
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-clover
+          path: build/coverage/clover.xml
+
+      - name: Run smoke test
+        run: |
+          php -S 127.0.0.1:9091 -t public > /tmp/cabify-http.log 2>&1 &
+          server_pid=$!
+          trap "kill $server_pid" EXIT
+          sleep 2
+          ./scripts/composerw smoke
